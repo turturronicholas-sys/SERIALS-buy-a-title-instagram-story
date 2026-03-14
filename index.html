@@ -152,12 +152,17 @@ const ROWS = 4, COLS = 4;
 const PRICES = [5, 10, 15, 20];
 const NW = 567, NH = 1007;
 
-// Clip rect: strictly inside yellow borders (y=239-867 excludes the yellow strips)
-const CLIP_X = 17, CLIP_Y = 239;
-const CLIP_W = 533, CLIP_H = 628;
+// Clip: full yellow perimeter rectangle
+const CLIP_X = 16, CLIP_Y = 231;
+const CLIP_W = 532, CLIP_H = 645;
 
+// Click targets: circle-centered (for hover outline positioning)
 const COL_BOUNDS = [[0.0441, 0.2804], [0.2804, 0.4938], [0.4938, 0.7037], [0.7037, 0.9559]];
 const ROW_BOUNDS = [[0.146, 0.4131], [0.4131, 0.5591], [0.5591, 0.717], [0.717, 0.9722]];
+
+// Erase rects: full extent including yellow side/top/bottom borders
+const COL_ERASE = [[0.0282, 0.2804], [0.2804, 0.4938], [0.4938, 0.7037], [0.7037, 0.9665]];
+const ROW_ERASE = [[0.2294, 0.4131], [0.4131, 0.5591], [0.5591, 0.717], [0.717, 0.8699]];
 
 let donated = 0, removedCount = 0;
 const TOTAL = ROWS * COLS;
@@ -196,10 +201,22 @@ function buildFrameCanvas() {
   fctx.putImageData(id, 0, 0);
 }
 
+// Erase rect for a tile — uses full-extent bounds including yellow border strips
+function eraseRect(row, col) {
+  const [x0f, x1f] = COL_ERASE[col];
+  const [y0f, y1f] = ROW_ERASE[row];
+  return { x: x0f*NW, y: y0f*NH, w: (x1f-x0f)*NW, h: (y1f-y0f)*NH };
+}
+
+// Click target rect — circle-centered (used for hit div positioning)
+function tileRect(row, col) {
+  const [x0f,x1f] = COL_BOUNDS[col], [y0f,y1f] = ROW_BOUNDS[row];
+  return { x:x0f*NW, y:y0f*NH, w:(x1f-x0f)*NW, h:(y1f-y0f)*NH };
+}
+
 function renderTiles() {
   octx.clearRect(0, 0, NW, NH);
   octx.save();
-  // Hard clip: only draw tile overlay pixels within the safe rect (no yellow bleed)
   octx.beginPath();
   octx.rect(CLIP_X, CLIP_Y, CLIP_W, CLIP_H);
   octx.clip();
@@ -209,30 +226,25 @@ function renderTiles() {
   for (let r = 0; r < ROWS; r++)
     for (let c = 0; c < COLS; c++)
       if (removed[r][c]) {
-        const {x,y,w,h} = tileRect(r,c);
+        const {x,y,w,h} = eraseRect(r,c);
         octx.fillStyle = 'rgba(0,0,0,1)'; octx.fillRect(x,y,w,h);
       }
   octx.restore();
   octx.globalCompositeOperation = 'source-over';
 }
 
+// Layer order: photo → frame → tiles (tiles always on top)
 function compositeToMain(hideTiles) {
   ctx.clearRect(0, 0, NW, NH);
   if (imgPhoto) {
-    const dw = imgPhoto.naturalWidth * photoScale;
-    const dh = imgPhoto.naturalHeight * photoScale;
-    ctx.drawImage(imgPhoto, photoOffsetX, photoOffsetY, dw, dh);
+    ctx.drawImage(imgPhoto, photoOffsetX, photoOffsetY,
+      imgPhoto.naturalWidth * photoScale, imgPhoto.naturalHeight * photoScale);
   }
-  if (!hideTiles) ctx.drawImage(offTiles, 0, 0, NW, NH);
   ctx.drawImage(offFrame, 0, 0, NW, NH);
+  if (!hideTiles) ctx.drawImage(offTiles, 0, 0, NW, NH);
 }
 
 function renderCanvas(hideTiles) { renderTiles(); compositeToMain(hideTiles); }
-
-function tileRect(row, col) {
-  const [x0f,x1f] = COL_BOUNDS[col], [y0f,y1f] = ROW_BOUNDS[row];
-  return { x:x0f*NW, y:y0f*NH, w:(x1f-x0f)*NW, h:(y1f-y0f)*NH };
-}
 
 function buildGrid() {
   const tg = document.getElementById('tileGrid');
@@ -276,13 +288,11 @@ function toggleDragMode() {
   if (dragMode) {
     btn.classList.add('active'); btn.textContent = '✓ DONE';
     hint.classList.add('visible'); canvas.classList.add('drag-mode');
-    tg.style.pointerEvents = 'none';
-    compositeToMain(true);
+    tg.style.pointerEvents = 'none'; compositeToMain(true);
   } else {
     btn.classList.remove('active'); btn.textContent = '✥ REPOSITION';
     hint.classList.remove('visible'); canvas.classList.remove('drag-mode');
-    tg.style.pointerEvents = '';
-    compositeToMain(false);
+    tg.style.pointerEvents = ''; compositeToMain(false);
   }
 }
 
@@ -302,7 +312,6 @@ window.addEventListener('mousemove', function(e) {
   compositeToMain(true);
 });
 window.addEventListener('mouseup', ()=>{ isDragging=false; });
-
 canvas.addEventListener('touchstart', function(e) {
   if (!dragMode) return;
   const t=e.touches[0]; isDragging=true;
@@ -330,7 +339,7 @@ function handleClick(tile, event, row, col) {
 }
 
 function animateErase(row, col, onDone) {
-  const {x,y,w,h}=tileRect(row,col);
+  const {x,y,w,h}=eraseRect(row,col);
   const START=performance.now(), DUR=380;
   function step(now) {
     const t=Math.min((now-START)/DUR,1), alpha=t*t*(3-2*t);
@@ -342,7 +351,7 @@ function animateErase(row, col, onDone) {
     octx.globalCompositeOperation='destination-out';
     for (let r=0;r<ROWS;r++) for (let c=0;c<COLS;c++)
       if (removed[r][c]&&!(r===row&&c===col)) {
-        const rr=tileRect(r,c); octx.fillStyle='rgba(0,0,0,1)'; octx.fillRect(rr.x,rr.y,rr.w,rr.h);
+        const rr=eraseRect(r,c); octx.fillStyle='rgba(0,0,0,1)'; octx.fillRect(rr.x,rr.y,rr.w,rr.h);
       }
     octx.fillStyle=`rgba(0,0,0,${alpha})`; octx.fillRect(x,y,w,h);
     octx.restore(); octx.globalCompositeOperation='source-over';
